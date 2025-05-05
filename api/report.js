@@ -39,8 +39,8 @@ module.exports = async (req, res) => {
 
     // Define the valid channel combinations
     const validChannels = [
-      ["Carro", "Online Store", "Lyve: Shoppable Video & Stream"],
-      ["Collective: Supplier", "Online Store", "Lyve: Shoppable Video & Stream"]
+      ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
+      ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
     ];
 
     // Check each product and see if it meets the required channel conditions
