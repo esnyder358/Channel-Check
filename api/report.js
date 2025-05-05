@@ -3,10 +3,10 @@ import axios from 'axios';
 export default async function handler(req, res) {
   try {
     // Retrieve Shopify API credentials and domain from environment variables
-    const { SHOPIFY_API_KEY, SHOPIFY_API_PASSWORD, SHOPIFY_SHOP } = process.env;
+    const { SHOPIFY_API_KEY, SHOPIFY_API_PASSWORD, SHOPIFY_STORE_DOMAIN } = process.env;
     
     // Shopify Storefront URL and API URL
-    const shopifyUrl = `https://${SHOPIFY_SHOP}/admin/api/2023-04/products.json`;
+    const shopifyUrl = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-04/products.json`;
     
     // Basic Authentication Header for Shopify API
     const auth = {
