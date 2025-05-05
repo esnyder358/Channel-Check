@@ -1,20 +1,27 @@
 import axios from 'axios';
 
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   try {
-    // Retrieve Shopify API credentials and domain from environment variables
-    const { SHOPIFY_ADMIN_API_KEY, SHOPIFY_ADMIN_API_PASSWORD, SHOPIFY_STORE_DOMAIN } = process.env;
-    
-    // Shopify Storefront URL and API URL
-    const shopifyUrl = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-04/products.json`;
-    
-    // Basic Authentication Header for Shopify API
-    const auth = {
-      auth: {
-        username: SHOPIFY_ADMIN_API_KEY,
-        password: SHOPIFY_ADMIN_API_PASSWORD,
-      },
-    };
+    const {
+      SHOPIFY_STORE_DOMAIN,
+      SHOPIFY_ADMIN_API_KEY,
+      SHOPIFY_ADMIN_API_PASSWORD,
+      TAGS_TO_CHECK,
+      POSTMARK_API_KEY,
+      EMAIL_TO,
+      EMAIL_FROM
+    } = process.env;
+
+    console.log("🔧 ENV loaded:", {
+      SHOPIFY_STORE_DOMAIN,
+      TAGS_TO_CHECK,
+      EMAIL_TO,
+      EMAIL_FROM
+    });
+
+    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_KEY || !SHOPIFY_ADMIN_API_PASSWORD) {
+      throw new Error("Missing Shopify credentials in environment.");
+    }
 
     // Fetch products from Shopify
     const response = await axios.get(shopifyUrl, auth);
