@@ -1,84 +1,54 @@
-import axios from 'axios';
+const axios = require('axios');
 
-module.exports = async (req, res) => {
+// Your environment variables should be set up in GitHub secrets or locally for testing
+const {
+  SHOPIFY_STORE_DOMAIN,
+  SHOPIFY_ADMIN_API_KEY,
+  SHOPIFY_ADMIN_API_PASSWORD,
+} = process.env;
+
+async function getMissingSalesChannelsProducts() {
   try {
-    const {
-      SHOPIFY_STORE_DOMAIN,
-      SHOPIFY_ADMIN_API_KEY,
-      SHOPIFY_ADMIN_API_PASSWORD,
-      POSTMARK_API_KEY,
-      EMAIL_TO,
-      EMAIL_FROM
-    } = process.env;
-
-    console.log("🔧 ENV loaded:", {
-      SHOPIFY_STORE_DOMAIN,
-      EMAIL_TO,
-      EMAIL_FROM
-    });
+    console.log("🔧 Starting to fetch products with 'Missing Sales Channels' tag");
 
     // Check for required Shopify credentials
     if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_KEY || !SHOPIFY_ADMIN_API_PASSWORD) {
       throw new Error("Missing Shopify credentials in environment.");
     }
 
-    // Construct Shopify API URL
-    const shopifyUrl = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-04/products.json`;
+    // Shopify API URL to fetch products with the tag "Missing Sales Channels"
+    const shopifyUrl = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-04/products.json?tag=Missing%20Sales%20Channels`;
 
     // Authentication headers for Shopify
     const auth = {
       auth: {
         username: SHOPIFY_ADMIN_API_KEY,
-        password: SHOPIFY_ADMIN_API_PASSWORD
-      }
+        password: SHOPIFY_ADMIN_API_PASSWORD,
+      },
     };
 
     // Fetch products from Shopify
     const response = await axios.get(shopifyUrl, auth);
     const products = response.data.products;
 
-    // Define the valid channel combinations
-    const validChannels = [
-      ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
-      ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
-    ];
+    // Filter products with the "Missing Sales Channels" tag
+    const missingSalesChannelsProducts = products.filter(product =>
+      product.tags.includes('Missing Sales Channels')
+    );
 
-    // Check each product and see if it meets the required channel conditions
-    const invalidProducts = [];
-
-    for (const product of products) {
-      // Flatten the channels for each variant and get unique channels
-      const productChannels = product.variants.flatMap(variant => {
-        const variantMetafields = variant.metafields?.custom?.variantchannels || [];
-        return variantMetafields; // Collect the variant's channels
+    // Display product IDs for products that have the "Missing Sales Channels" tag
+    if (missingSalesChannelsProducts.length === 0) {
+      console.log("No products found with the 'Missing Sales Channels' tag.");
+    } else {
+      console.log("Found products with 'Missing Sales Channels' tag:");
+      missingSalesChannelsProducts.forEach(product => {
+        console.log(`Product ID: ${product.id}`);
       });
-
-      // Remove duplicates from the list of channels
-      const uniqueChannels = [...new Set(productChannels)];
-
-      // Check if the product is in any of the valid channel combinations
-      const isValid = validChannels.some(combination =>
-        combination.every(channel => uniqueChannels.includes(channel))
-      );
-
-      // Exclude products that match the valid combinations
-      if (!isValid) {
-        invalidProducts.push({
-          id: product.id,
-          title: product.title,
-          channels: uniqueChannels,  // Store the unique channels for reporting
-        });
-      }
     }
-
-    // Respond with the invalid products list
-    res.status(200).json({
-      success: true,
-      message: "Report generated successfully",
-      invalidProducts: invalidProducts,
-    });
   } catch (error) {
     console.error("Error fetching Shopify products:", error);
-    res.status(500).json({ success: false, message: "Failed to generate report", error: error.message });
   }
-};
+}
+
+// Run the function to get the products
+getMissingSalesChannelsProducts();
