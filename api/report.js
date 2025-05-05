@@ -1,3 +1,9 @@
+export default async function handler(req, res) {
+  console.log("API route hit");
+
+  // ... rest of your code
+}
+
 const fetch = require('node-fetch');
 
 // Fetch products from Shopify using API credentials
