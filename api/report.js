@@ -47,27 +47,26 @@ module.exports = async (req, res) => {
     const invalidProducts = [];
 
     for (const product of products) {
-      // Fetch variant metafields (ensure the metafields are loaded correctly from Shopify)
-      const productChannels = product.variants.map(variant => {
+      // Flatten the channels for each variant and get unique channels
+      const productChannels = product.variants.flatMap(variant => {
         const variantMetafields = variant.metafields?.custom?.variantchannels || [];
-        return variantMetafields;
+        return variantMetafields; // Collect the variant's channels
       });
 
-      // Check if the product channels match any of the valid combinations
+      // Remove duplicates from the list of channels
+      const uniqueChannels = [...new Set(productChannels)];
+
+      // Check if the product is in any of the valid channel combinations
       const isValid = validChannels.some(combination =>
-        combination.every(channel =>
-          productChannels.some(variantChannels =>
-            variantChannels.includes(channel)
-          )
-        )
+        combination.every(channel => uniqueChannels.includes(channel))
       );
 
-      // Add product to invalid products if it doesn't match any valid combinations
+      // Exclude products that match the valid combinations
       if (!isValid) {
         invalidProducts.push({
           id: product.id,
           title: product.title,
-          channels: productChannels,
+          channels: uniqueChannels,  // Store the unique channels for reporting
         });
       }
     }
