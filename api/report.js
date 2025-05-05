@@ -7,7 +7,7 @@ module.exports = async (req, res) => {
       SHOPIFY_STORE_DOMAIN,
       SHOPIFY_ADMIN_API_KEY,
       SHOPIFY_ADMIN_API_PASSWORD,
-      TAGS_TO_CHECK,
+      TAGS_TO_CHECK, // Environmental variable for the tag
       POSTMARK_API_KEY,
       EMAIL_TO,
       EMAIL_FROM
@@ -24,8 +24,9 @@ module.exports = async (req, res) => {
       throw new Error("Missing Shopify credentials in environment.");
     }
 
-    const tagsToCheck = TAGS_TO_CHECK.split(',').map(t => t.trim().toLowerCase());
-    const missingTagProductIds = [];
+    // Tag to check: TAGS_TO_CHECK (should be "Missing Sales Channels")
+    const missingTag = TAGS_TO_CHECK.trim().toLowerCase();
+    const productIdsWithTag = [];
     let products = [];
     let pageInfo = null;
     let hasNextPage = true;
@@ -49,34 +50,35 @@ module.exports = async (req, res) => {
       products = data.products || [];
       console.log(`📦 Fetched ${products.length} products`);
 
+      // Check each product for the "Missing Sales Channels" tag
       for (const product of products) {
         const productTags = product.tags.toLowerCase().split(',').map(t => t.trim());
-        const hasRequiredTag = tagsToCheck.some(tag => productTags.includes(tag));
-        if (!hasRequiredTag) {
-          missingTagProductIds.push(product.id);
+        const hasMissingSalesChannelsTag = productTags.includes(missingTag);
+        if (hasMissingSalesChannelsTag) {
+          productIdsWithTag.push(product.id);
         }
       }
 
       // Shopify REST pagination (simplified assumption for now)
-      hasNextPage = false;
+      hasNextPage = false; // Adjust pagination logic if necessary
     }
 
-    console.log("🚨 Missing tag product IDs:", missingTagProductIds);
+    console.log("🚨 Products with 'Missing Sales Channels' tag:", productIdsWithTag);
 
-    if (missingTagProductIds.length > 0) {
+    if (productIdsWithTag.length > 0) {
       const client = new postmark.ServerClient(POSTMARK_API_KEY);
       const sendResult = await client.sendEmail({
         From: EMAIL_FROM,
         To: EMAIL_TO,
-        Subject: "Missing Tags Report",
-        TextBody: `Products missing required tags:\n\n${missingTagProductIds.join('\n')}`
+        Subject: "Products with 'Missing Sales Channels' Tag",
+        TextBody: `Products with the 'Missing Sales Channels' tag:\n\n${productIdsWithTag.join('\n')}`
       });
       console.log("📧 Email sent:", sendResult);
     }
 
     res.status(200).json({
       message: "Check complete.",
-      missing: missingTagProductIds
+      productsWithTag: productIdsWithTag
     });
 
   } catch (err) {
