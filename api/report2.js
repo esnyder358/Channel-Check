@@ -19,7 +19,7 @@ module.exports = async (req, res) => {
     const vendorStartsWithAtoM = (vendor) => {
       if (!vendor || typeof vendor !== 'string') return false;
       const firstChar = vendor.trim().charAt(0).toUpperCase();
-      return firstChar >= 'N' && firstChar <= 'R';
+      return firstChar >= 'H' && firstChar <= 'N';
     };
 
     const failedProductIds = [];
@@ -86,14 +86,14 @@ module.exports = async (req, res) => {
       await client.sendEmail({
         From: EMAIL_FROM,
         To: EMAIL_TO,
-        Subject: "Sales Channel Check: Vendors A–M",
-        TextBody: `The following products (vendor A–M) do NOT meet the required channel groups:\n\n${failedProductIds.join('\n')}`
+        Subject: "Sales Channel Check: Vendors H-N",
+        TextBody: `The following products (vendor H-N) do NOT meet the required channel groups:\n\n${failedProductIds.join('\n')}`
       });
     }
 
     res.status(200).json({
       success: true,
-      checked: "A–M vendors",
+      checked: "H-N vendors",
       totalFailures: failedProductIds.length,
       productIds: failedProductIds
     });
