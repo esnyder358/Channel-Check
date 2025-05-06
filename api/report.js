@@ -1,13 +1,11 @@
-const fetch = require('node-fetch');
+const axios = require('axios');
 const postmark = require('postmark');
 
 module.exports = async (req, res) => {
   try {
     const {
       SHOPIFY_STORE_DOMAIN,
-      SHOPIFY_ADMIN_API_KEY,
       SHOPIFY_ADMIN_API_PASSWORD,
-      TAGS_TO_CHECK, // Environmental variable for the tag
       POSTMARK_API_KEY,
       EMAIL_TO,
       EMAIL_FROM
@@ -15,74 +13,116 @@ module.exports = async (req, res) => {
 
     console.log("🔧 ENV loaded:", {
       SHOPIFY_STORE_DOMAIN,
-      TAGS_TO_CHECK,
       EMAIL_TO,
       EMAIL_FROM
     });
 
-    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_KEY || !SHOPIFY_ADMIN_API_PASSWORD) {
+    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_PASSWORD) {
       throw new Error("Missing Shopify credentials in environment.");
     }
 
-    // Tag to check: TAGS_TO_CHECK (should be "Missing Sales Channels")
-    const missingTag = TAGS_TO_CHECK.trim().toLowerCase();
-    const productIdsWithTag = [];
-    let products = [];
-    let pageInfo = null;
-    let hasNextPage = true;
+    const fetchProducts = async () => {
+      let allProducts = [];
+      let pageInfo = null;
+      let hasNextPage = true;
 
-    while (hasNextPage) {
-      const url = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/products.json?limit=250${pageInfo ? `&page_info=${pageInfo}` : ''}`;
-      const response = await fetch(url, {
-        headers: {
-          "X-Shopify-Access-Token": SHOPIFY_ADMIN_API_PASSWORD,
-          "Content-Type": "application/json"
+      while (hasNextPage) {
+        const url = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/products.json?limit=250${pageInfo ? `&page_info=${pageInfo}` : ''}`;
+
+        const response = await axios.get(url, {
+          headers: {
+            'X-Shopify-Access-Token': SHOPIFY_ADMIN_API_PASSWORD,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        const linkHeader = response.headers['link'];
+        if (linkHeader && linkHeader.includes('rel="next"')) {
+          const match = linkHeader.match(/page_info=([^&>]+)/);
+          pageInfo = match ? match[1] : null;
+        } else {
+          hasNextPage = false;
         }
-      });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("❌ Shopify API error:", errorText);
-        throw new Error("Shopify API request failed.");
+        allProducts = allProducts.concat(response.data.products);
       }
 
-      const data = await response.json();
-      products = data.products || [];
-      console.log(`📦 Fetched ${products.length} products`);
+      return allProducts;
+    };
 
-      // Check each product for the "Missing Sales Channels" tag
-      for (const product of products) {
-        const productTags = product.tags.toLowerCase().split(',').map(t => t.trim());
-        const hasMissingSalesChannelsTag = productTags.includes(missingTag);
-        if (hasMissingSalesChannelsTag) {
-          productIdsWithTag.push(product.id);
+    const fetchProductChannels = async (productId) => {
+      const gid = `gid://shopify/Product/${productId}`;
+      const query = {
+        query: `{
+          product(id: "${gid}") {
+            publications(first: 10) {
+              edges {
+                node {
+                  publication {
+                    name
+                  }
+                }
+              }
+            }
+          }
+        }`
+      };
+
+      const response = await axios.post(
+        `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/graphql.json`,
+        query,
+        {
+          headers: {
+            'X-Shopify-Access-Token': SHOPIFY_ADMIN_API_PASSWORD,
+            'Content-Type': 'application/json'
+          }
         }
-      }
+      );
 
-      // Shopify REST pagination (simplified assumption for now)
-      hasNextPage = false; // Adjust pagination logic if necessary
+      return response.data.data.product.publications.edges.map(
+        edge => edge.node.publication.name
+      );
+    };
+
+    const validChannelGroups = [
+      ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
+      ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
+    ];
+
+    const allProducts = await fetchProducts();
+    const invalidProductIds = [];
+
+    for (const product of allProducts) {
+      const channelNames = await fetchProductChannels(product.id);
+
+      const matchesGroup = validChannelGroups.some(group =>
+        group.every(reqChannel => channelNames.includes(reqChannel))
+      );
+
+      if (!matchesGroup) {
+        invalidProductIds.push(product.id);
+      }
     }
 
-    console.log("🚨 Products with 'Missing Sales Channels' tag:", productIdsWithTag);
+    console.log("🚨 Products not in valid channel groups:", invalidProductIds);
 
-    if (productIdsWithTag.length > 0) {
+    if (invalidProductIds.length > 0) {
       const client = new postmark.ServerClient(POSTMARK_API_KEY);
-      const sendResult = await client.sendEmail({
+      await client.sendEmail({
         From: EMAIL_FROM,
         To: EMAIL_TO,
-        Subject: "Products with 'Missing Sales Channels' Tag",
-        TextBody: `Products with the 'Missing Sales Channels' tag:\n\n${productIdsWithTag.join('\n')}`
+        Subject: "Products Missing Required Channel Groups",
+        TextBody: `The following product IDs do not match required channel groups:\n\n${invalidProductIds.join('\n')}`
       });
-      console.log("📧 Email sent:", sendResult);
     }
 
     res.status(200).json({
-      message: "Check complete.",
-      productsWithTag: productIdsWithTag
+      success: true,
+      missing: invalidProductIds
     });
 
-  } catch (err) {
-    console.error("💥 Error occurred:", err);
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error("💥 Error generating report:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 };
