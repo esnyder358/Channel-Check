@@ -1,93 +1,106 @@
-// pages/api/report.js (for Vercel with GraphQL and A-M vendor filter)
+const fetch = require('node-fetch');
+const postmark = require('postmark');
 
-import { request, gql } from 'graphql-request';
-
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   try {
     const {
       SHOPIFY_STORE_DOMAIN,
+      SHOPIFY_ADMIN_API_KEY,
       SHOPIFY_ADMIN_API_PASSWORD,
+      POSTMARK_API_KEY,
+      EMAIL_TO,
+      EMAIL_FROM
     } = process.env;
 
-    const endpoint = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/graphql.json`;
-    const headers = {
-      'X-Shopify-Access-Token': SHOPIFY_ADMIN_API_PASSWORD,
-      'Content-Type': 'application/json',
-    };
+    console.log("🔧 ENV loaded:", {
+      SHOPIFY_STORE_DOMAIN,
+      EMAIL_TO,
+      EMAIL_FROM
+    });
 
-    const validChannelGroups = [
-      ['Online Store', 'Carro', 'Lyve: Shoppable Video & Stream'],
-      ['Online Store', 'Collective: Supplier', 'Lyve: Shoppable Video & Stream']
-    ];
+    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_KEY || !SHOPIFY_ADMIN_API_PASSWORD) {
+      throw new Error("Missing Shopify credentials in environment.");
+    }
 
-    let productIds = [];
-    let cursor = null;
+    const missingTagProductIds = [];
+    let pageInfo = null;
     let hasNextPage = true;
 
+    // Loop through all pages of products
     while (hasNextPage) {
-      const query = gql`
-        query FetchProducts($cursor: String) {
-          products(first: 50, after: $cursor, query: "vendor:A* OR vendor:B* OR vendor:C* OR vendor:D* OR vendor:E* OR vendor:F* OR vendor:G* OR vendor:H* OR vendor:I* OR vendor:J* OR vendor:K* OR vendor:L* OR vendor:M*") {
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-            edges {
-              node {
-                id
-                title
-                variants(first: 50) {
-                  edges {
-                    node {
-                      metafield(namespace: "custom", key: "variantchannels") {
-                        value
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
+      const url = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/products.json?limit=250${pageInfo ? `&page_info=${pageInfo}` : ''}`;
+      const response = await fetch(url, {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ADMIN_API_PASSWORD,
+          "Content-Type": "application/json"
         }
-      `;
+      });
 
-      const data = await request(endpoint, query, { cursor }, headers);
-      const edges = data.products.edges;
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("❌ Shopify API error:", errorText);
+        throw new Error("Shopify API request failed.");
+      }
 
-      for (const edge of edges) {
-        const product = edge.node;
+      const data = await response.json();
+      const products = data.products || [];
+      console.log(`📦 Fetched ${products.length} products`);
 
-        const allChannels = product.variants.edges
-          .map(v => {
-            const val = v.node.metafield?.value;
-            try {
-              return val ? JSON.parse(val) : [];
-            } catch (e) {
-              return [];
-            }
-          });
+      // Process each product
+      for (const product of products) {
+        // Skip products that don't match the vendor filter (A-M)
+        const vendor = product.vendor || '';
+        if (vendor[0].toUpperCase() < 'A' || vendor[0].toUpperCase() > 'M') continue;
 
-        const isValid = validChannelGroups.some(group =>
-          group.every(channel =>
-            allChannels.some(variantChannels => variantChannels.includes(channel))
+        // Check if the product is in the proper channels
+        const productChannels = product.variants
+          .map(variant => variant.metafields?.custom?.variantchannels || [])
+          .flat();
+
+        const validCombinations = [
+          ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
+          ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
+        ];
+
+        const isValid = validCombinations.some(combination =>
+          combination.every(channel =>
+            productChannels.some(variantChannels =>
+              variantChannels.includes(channel)
+            )
           )
         );
 
+        // If the product is not in the valid channels, add to the list of products with missing channels
         if (!isValid) {
-          const productId = product.id.replace('gid://shopify/Product/', '');
-          productIds.push(productId);
+          missingTagProductIds.push(product.id);
         }
       }
 
-      hasNextPage = data.products.pageInfo.hasNextPage;
-      cursor = data.products.pageInfo.endCursor;
+      // Check if there's a next page of products
+      pageInfo = data.links?.next || null;
+      hasNextPage = !!pageInfo;
     }
 
-    res.setHeader('Content-Type', 'text/plain');
-    res.status(200).send(productIds.join('\n'));
+    console.log("🚨 Missing tag product IDs:", missingTagProductIds);
+
+    if (missingTagProductIds.length > 0) {
+      const client = new postmark.ServerClient(POSTMARK_API_KEY);
+      const sendResult = await client.sendEmail({
+        From: EMAIL_FROM,
+        To: EMAIL_TO,
+        Subject: "Products Missing Proper Channels",
+        TextBody: `Products missing proper sales channels:\n\n${missingTagProductIds.join('\n')}`
+      });
+      console.log("📧 Email sent:", sendResult);
+    }
+
+    res.status(200).json({
+      message: "Check complete.",
+      missing: missingTagProductIds
+    });
 
   } catch (err) {
-    console.error('Error:', err);
-    res.status(500).send('Internal Server Error');
+    console.error("💥 Error occurred:", err);
+    res.status(500).json({ error: err.message });
   }
-}
+};
