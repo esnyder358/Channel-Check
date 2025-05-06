@@ -8,17 +8,17 @@ module.exports = async (req, res) => {
     } = process.env;
 
     if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_PASSWORD) {
-      throw new Error("Missing Shopify credentials in environment.");
+      throw new Error("Missing Shopify credentials.");
     }
 
-    const validGroups = [
+    const requiredChannelGroups = [
       ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
       ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
     ];
 
-    const matchingProductIds = [];
-    let pageInfo = null;
+    const invalidProductIds = [];
     let hasNextPage = true;
+    let pageInfo = null;
 
     while (hasNextPage) {
       const url = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/products.json?limit=250${pageInfo ? `&page_info=${pageInfo}` : ''}`;
@@ -31,48 +31,42 @@ module.exports = async (req, res) => {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Shopify API error: ${errorText}`);
+        console.error("Shopify API error:", errorText);
+        throw new Error("Shopify API request failed.");
       }
 
       const data = await response.json();
       const products = data.products || [];
 
       for (const product of products) {
-        const vendorFirstLetter = product.vendor?.[0]?.toUpperCase();
-        if (!vendorFirstLetter || vendorFirstLetter < 'A' || vendorFirstLetter > 'M') continue;
+        const vendor = product.vendor || '';
+        const firstLetter = vendor.trim().charAt(0).toUpperCase();
 
-        const channelNames = (product.published_scope === 'global')
-          ? ["Online Store"] // fallback assumption
-          : [];
+        // Only process vendors starting with A–M
+        if (firstLetter < 'A' || firstLetter > 'M') continue;
 
-        // If your app has access to real channel publishing data, use it here
-        if (product.admin_graphql_api_id.includes('Product')) {
-          // This is where you'd check real sales channel info if available
-          // For now, assume channelNames comes from metafields or something else you control
-        }
+        // Example stub — replace this with how you actually retrieve the product's channels
+        const productChannels = product.metafields?.custom?.variantchannels || [];
 
-        const isInValidGroup = validGroups.some(group =>
-          group.every(channel => channelNames.includes(channel))
+        const isValid = requiredChannelGroups.some(group =>
+          group.every(channel => productChannels.includes(channel))
         );
 
-        if (!isInValidGroup) {
-          matchingProductIds.push(product.id);
+        if (!isValid) {
+          invalidProductIds.push(product.id);
         }
       }
 
-      // Simplified: Shopify may not return real `page_info`, so we limit pagination for now
+      // Pagination (this needs to be improved if needed for full product set)
       hasNextPage = false;
     }
 
-    // 🖥 Output plain text in browser
+    // Respond as plain text
     res.setHeader('Content-Type', 'text/plain');
-    res.status(200).send(
-      matchingProductIds.length
-        ? `Products NOT in a valid channel group (A–M vendors):\n\n${matchingProductIds.join('\n')}`
-        : "✅ All A–M vendor products are in valid channel groups."
-    );
+    res.status(200).send(invalidProductIds.join('\n'));
+
   } catch (err) {
-    res.setHeader('Content-Type', 'text/plain');
-    res.status(500).send(`💥 Error: ${err.message}`);
+    console.error("Error generating report:", err);
+    res.status(500).send(`Error: ${err.message}`);
   }
 };
