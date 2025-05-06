@@ -48,11 +48,11 @@ module.exports = async (req, res) => {
 
       // Process each product
       for (const product of products) {
-        // Skip products that don't match the vendor filter (A-M)
+        // Skip products from vendors A-M
         const vendor = product.vendor || '';
         if (vendor[0].toUpperCase() < 'A' || vendor[0].toUpperCase() > 'M') continue;
 
-        // Check if the product is in the proper channels
+        // Get channels for the product by checking variants' metafields
         const productChannels = product.variants
           .map(variant => variant.metafields?.custom?.variantchannels || [])
           .flat();
@@ -62,6 +62,7 @@ module.exports = async (req, res) => {
           ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
         ];
 
+        // Check if the product is in any valid combination of channels
         const isValid = validCombinations.some(combination =>
           combination.every(channel =>
             productChannels.some(variantChannels =>
@@ -70,7 +71,7 @@ module.exports = async (req, res) => {
           )
         );
 
-        // If the product is not in the valid channels, add to the list of products with missing channels
+        // If the product is not in a valid channel combination, add to missing list
         if (!isValid) {
           missingTagProductIds.push(product.id);
         }
