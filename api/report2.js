@@ -19,7 +19,7 @@ module.exports = async (req, res) => {
     const vendorStartsWithAtoM = (vendor) => {
       if (!vendor || typeof vendor !== 'string') return false;
       const firstChar = vendor.trim().charAt(0).toUpperCase();
-      return firstChar >= 'N' && firstChar <= 'Z';
+      return firstChar >= 'N' && firstChar <= 'R';
     };
 
     const failedProductIds = [];
