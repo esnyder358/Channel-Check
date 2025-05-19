@@ -41,30 +41,22 @@ module.exports = async (req, res) => {
         const vendorFirstLetter = product.vendor?.[0]?.toUpperCase();
         if (!vendorFirstLetter || vendorFirstLetter < 'A' || vendorFirstLetter > 'G') continue;
 
-        const channelNames = (product.published_scope === 'global')
-          ? ["Online Store"] // fallback assumption
-          : [];
-
-        // If your app has access to real channel publishing data, use it here
-        if (product.admin_graphql_api_id.includes('Product')) {
-          // This is where you'd check real sales channel info if available
-          // For now, assume channelNames comes from metafields or something else you control
-        }
+        // ✅ Replace this function with your real channel-detection logic later
+        const channelNames = getSimulatedChannelNames(product);
 
         const isInValidGroup = validGroups.some(group =>
-          group.every(channel => channelNames.includes(channel))
+          group.every(requiredChannel => channelNames.includes(requiredChannel))
         );
 
         if (!isInValidGroup) {
-          matchingProductIds.push(product.id);
+          matchingProductIds.push(`${product.title} (${product.id})`);
         }
       }
 
-      // Simplified: Shopify may not return real `page_info`, so we limit pagination for now
+      // Pagination logic is simplified — only first page
       hasNextPage = false;
     }
 
-    // 🖥 Output plain text in browser
     res.setHeader('Content-Type', 'text/plain');
     res.status(200).send(
       matchingProductIds.length
@@ -76,3 +68,23 @@ module.exports = async (req, res) => {
     res.status(500).send(`💥 Error: ${err.message}`);
   }
 };
+
+// 🧪 TEMP: Simulate product publishing channels
+function getSimulatedChannelNames(product) {
+  // Example 1: simulate based on product title
+  if (product.title.includes("Carro")) {
+    return ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"];
+  }
+
+  // Example 2: based on vendor
+  if (product.vendor === "Test Vendor A") {
+    return ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"];
+  }
+
+  // Example 3: default fallback
+  if (product.published_scope === "global") {
+    return ["Online Store"];
+  }
+
+  return [];
+}
