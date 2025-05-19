@@ -30,8 +30,11 @@ module.exports = async (req, res) => {
     ];
 
     const matchingProductIds = [];
+    let cursor = null;
+    let page = 1;
 
-    // Only fetch 1 page of 50 products per run
+    const MAX_PAGES = 10; // safety limit: max pages to fetch per request (adjust as needed)
+
     const query = `
       query GetProducts($cursor: String) {
         products(first: 50, after: $cursor) {
@@ -59,57 +62,66 @@ module.exports = async (req, res) => {
       }
     `;
 
-    // Get cursor from query param to continue pagination
-    const cursor = req.query.cursor || null;
+    while (page <= MAX_PAGES) {
+      const response = await fetch(SHOPIFY_API_URL, {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ADMIN_API_PASSWORD,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ query, variables: { cursor } })
+      });
 
-    const response = await fetch(SHOPIFY_API_URL, {
-      method: "POST",
-      headers: {
-        "X-Shopify-Access-Token": SHOPIFY_ADMIN_API_PASSWORD,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ query, variables: { cursor } })
-    });
-
-    const result = await response.json();
-
-    if (!response.ok || result.errors) {
-      throw new Error(JSON.stringify(result.errors || result));
-    }
-
-    const products = result.data.products.edges;
-
-    for (const edge of products) {
-      const product = edge.node;
-      const vendorFirstLetter = product.vendor?.[0]?.toUpperCase();
-
-      if (!vendorFirstLetter || (vendorFirstLetter !== 'A' && vendorFirstLetter !== 'B')) continue;
-
-      const channelNames = product.resourcePublications.edges.map(
-        edge => edge.node.publication?.name
-      ).filter(Boolean);
-
-      const filteredChannels = channelNames.filter(name => !IGNORED_CHANNELS.has(name));
-
-      const isInValidGroup = VALID_GROUPS.some(group =>
-        group.every(required => filteredChannels.includes(required))
-      );
-
-      if (!isInValidGroup) {
-        matchingProductIds.push(`${product.title} (${product.id})`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Shopify API error: ${errorText}`);
       }
+
+      const result = await response.json();
+
+      if (result.errors) {
+        throw new Error(JSON.stringify(result.errors));
+      }
+
+      const products = result.data.products.edges;
+
+      for (const edge of products) {
+        const product = edge.node;
+        const vendorFirstLetter = product.vendor?.[0]?.toUpperCase();
+
+        if (!vendorFirstLetter || (vendorFirstLetter !== 'A' && vendorFirstLetter !== 'B')) continue;
+
+        const channelNames = product.resourcePublications.edges.map(
+          edge => edge.node.publication?.name
+        ).filter(Boolean);
+
+        const filteredChannels = channelNames.filter(name => !IGNORED_CHANNELS.has(name));
+
+        const isInValidGroup = VALID_GROUPS.some(group =>
+          group.every(required => filteredChannels.includes(required))
+        );
+
+        if (!isInValidGroup) {
+          matchingProductIds.push(`${product.title} (${product.id})`);
+        }
+      }
+
+      const { hasNextPage, endCursor } = result.data.products.pageInfo;
+      if (!hasNextPage) break;
+      cursor = endCursor;
+      page++;
     }
-
-    // If there’s more data, provide next cursor in response so client can call again with ?cursor=...
-    const { hasNextPage, endCursor } = result.data.products.pageInfo;
-
-    const responseText = matchingProductIds.length
-      ? `Products NOT in a valid channel group (A–B vendors):\n\n${matchingProductIds.join('\n')}`
-      : "✅ All A–B vendor products in this page are in valid channel groups.";
 
     res.setHeader('Content-Type', 'text/plain');
-    res.status(200).send(responseText + (hasNextPage ? `\n\nMore products available. Call again with ?cursor=${endCursor}` : ''));
 
+    if (matchingProductIds.length === 0) {
+      res.status(200).send(`✅ All A–B vendor products (up to ${page*50}) are in valid channel groups.`);
+    } else {
+      res.status(200).send(
+        `Products NOT in a valid channel group (A–B vendors, checked up to ${page*50} products):\n\n` +
+        matchingProductIds.join('\n')
+      );
+    }
   } catch (err) {
     res.setHeader('Content-Type', 'text/plain');
     res.status(500).send(`💥 Error: ${err.message}`);
