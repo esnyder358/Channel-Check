@@ -1,8 +1,3 @@
-{
-  "crons": [
-    {
-      "path": "/api/check-product-publications",
-      "schedule": "0 * * * *"
-    }
-  ]
-}
+module.exports = async (req, res) => {
+  res.status(200).send("✅ Function is working.");
+};
