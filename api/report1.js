@@ -11,10 +11,7 @@ module.exports = async (req, res) => {
       throw new Error("Missing Shopify credentials in environment.");
     }
 
-    const validGroups = [
-      ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
-      ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
-    ];
+    const SHOPIFY_API_URL = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/graphql.json`;
 
     const IGNORED_CHANNELS = new Set([
       "Blueswitch",
@@ -27,49 +24,77 @@ module.exports = async (req, res) => {
       "Pinterest"
     ]);
 
+    const VALID_GROUPS = [
+      ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
+      ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
+    ];
+
     const matchingProductIds = [];
-    let pageInfo = null;
+
     let hasNextPage = true;
+    let cursor = null;
 
     while (hasNextPage) {
-      const url = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/products.json?limit=250${pageInfo ? `&page_info=${pageInfo}` : ''}`;
-      const response = await fetch(url, {
+      const query = `
+        query GetProducts($cursor: String) {
+          products(first: 50, after: $cursor) {
+            pageInfo {
+              hasNextPage
+            }
+            edges {
+              cursor
+              node {
+                id
+                title
+                vendor
+                publications(first: 50) {
+                  edges {
+                    node {
+                      name
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const response = await fetch(SHOPIFY_API_URL, {
+        method: "POST",
         headers: {
           "X-Shopify-Access-Token": SHOPIFY_ADMIN_API_PASSWORD,
           "Content-Type": "application/json"
-        }
+        },
+        body: JSON.stringify({ query, variables: { cursor } })
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Shopify API error: ${errorText}`);
+      const result = await response.json();
+
+      if (!response.ok || result.errors) {
+        throw new Error(JSON.stringify(result.errors || result));
       }
 
-      const data = await response.json();
-      const products = data.products || [];
+      const products = result.data.products.edges;
+      hasNextPage = result.data.products.pageInfo.hasNextPage;
+      cursor = products.length > 0 ? products[products.length - 1].cursor : null;
 
-      for (const product of products) {
+      for (const edge of products) {
+        const product = edge.node;
         const vendorFirstLetter = product.vendor?.[0]?.toUpperCase();
         if (!vendorFirstLetter || vendorFirstLetter < 'A' || vendorFirstLetter > 'G') continue;
 
-        // Get simulated channel names (replace with real logic when ready)
-        let channelNames = getSimulatedChannelNames(product);
+        const channelNames = product.publications.edges.map(edge => edge.node.name);
+        const filteredChannels = channelNames.filter(name => !IGNORED_CHANNELS.has(name));
 
-        // Filter out ignored channels
-        channelNames = channelNames.filter(c => !IGNORED_CHANNELS.has(c));
-
-        // Is this product in at least one valid group?
-        const isInValidGroup = validGroups.some(group =>
-          group.every(requiredChannel => channelNames.includes(requiredChannel))
+        const isInValidGroup = VALID_GROUPS.some(group =>
+          group.every(required => filteredChannels.includes(required))
         );
 
         if (!isInValidGroup) {
           matchingProductIds.push(`${product.title} (${product.id})`);
         }
       }
-
-      // Pagination placeholder – only first 250 for now
-      hasNextPage = false;
     }
 
     res.setHeader('Content-Type', 'text/plain');
@@ -83,18 +108,3 @@ module.exports = async (req, res) => {
     res.status(500).send(`💥 Error: ${err.message}`);
   }
 };
-
-// 🧪 TEMP: Simulated channel data
-function getSimulatedChannelNames(product) {
-  // Example logic for mocking channel names
-  if (product.title.includes("Carro")) {
-    return ["Online Store", "Carro", "Lyve: Shoppable Video & Stream", "Pinterest"];
-  }
-  if (product.vendor === "Test Vendor A") {
-    return ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream", "Google & YouTube"];
-  }
-  if (product.published_scope === "global") {
-    return ["Online Store"];
-  }
-  return [];
-}
