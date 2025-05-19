@@ -1,26 +1,20 @@
 const fetch = require('node-fetch');
 const { Redis } = require('@upstash/redis');
+const postmark = require('postmark');
 
 const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  url: process.env.UPSTASH_REDIS_URL,
+  token: process.env.UPSTASH_REDIS_TOKEN,
 });
 
-const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
-const SHOPIFY_ADMIN_API_PASSWORD = process.env.SHOPIFY_ADMIN_API_PASSWORD;
+const postmarkClient = new postmark.ServerClient(process.env.POSTMARK_API_KEY);
 
-const POSTMARK_API_KEY = process.env.POSTMARK_API_KEY;
-const EMAIL_FROM = process.env.EMAIL_FROM;
-const EMAIL_TO = process.env.EMAIL_TO;
-
-// Your valid sales channel groups (products can have extra channels besides these groups)
-const validGroups = [
+const VALID_CHANNEL_GROUPS = [
   ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
   ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
 ];
 
-// List of ignored sales channels that do not affect validation
-const ignoredChannels = [
+const IGNORED_CHANNELS = new Set([
   "Blueswitch",
   "Multify",
   "Customer Shipping Rates",
@@ -28,88 +22,66 @@ const ignoredChannels = [
   "Shop",
   "Google & YouTube",
   "Yotpo Email Marketing & SMS",
-  "Pinterest",
-];
+  "Pinterest"
+]);
 
-async function getCursor() {
-  return await redis.get('productCursor');
-}
-
-async function setCursor(cursor) {
-  await redis.set('productCursor', cursor);
-}
-
-async function sendEmail(subject, body) {
-  const response = await fetch("https://api.postmarkapp.com/email", {
-    method: "POST",
-    headers: {
-      "Accept": "application/json",
-      "Content-Type": "application/json",
-      "X-Postmark-Server-Token": POSTMARK_API_KEY,
-    },
-    body: JSON.stringify({
-      From: EMAIL_FROM,
-      To: EMAIL_TO,
-      Subject: subject,
-      TextBody: body,
-    }),
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Postmark API error: ${errText}`);
-  }
-}
+const PRODUCTS_PER_BATCH = 250;
+const CURSOR_KEY = "shopify_cursor";
 
 module.exports = async (req, res) => {
   try {
-    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_PASSWORD) {
-      throw new Error("Missing Shopify credentials in environment.");
-    }
-    if (!POSTMARK_API_KEY || !EMAIL_FROM || !EMAIL_TO) {
-      throw new Error("Missing Postmark email credentials in environment.");
+    const {
+      SHOPIFY_STORE_DOMAIN,
+      SHOPIFY_ADMIN_API_PASSWORD,
+      EMAIL_FROM,
+      EMAIL_TO
+    } = process.env;
+
+    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_PASSWORD || !EMAIL_FROM || !EMAIL_TO) {
+      throw new Error("Missing required environment variables.");
     }
 
-    let cursor = await getCursor(); // null if none stored yet
+    let cursor = await redis.get(CURSOR_KEY);
     let hasNextPage = true;
     let checkedCount = 0;
     const invalidProductIds = [];
 
-    while (hasNextPage) {
-      // Shopify GraphQL Admin API query with cursor pagination
+    while (hasNextPage && checkedCount < 1000) {
       const query = `
-      {
-        products(first: 100${cursor ? `, after: "${cursor}"` : ''}) {
-          edges {
-            cursor
-            node {
-              id
-              vendor
-              publications {
-                edges {
-                  node {
-                    channel {
-                      name
+        query GetProducts($cursor: String) {
+          products(first: ${PRODUCTS_PER_BATCH}, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            edges {
+              node {
+                id
+                vendor
+                publications(first: 10) {
+                  edges {
+                    node {
+                      channel {
+                        name
+                      }
                     }
                   }
                 }
               }
             }
           }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
         }
-      }`;
+      `;
+
+      const variables = { cursor };
 
       const response = await fetch(`https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/graphql.json`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'X-Shopify-Access-Token': SHOPIFY_ADMIN_API_PASSWORD,
+          "Content-Type": "application/json",
+          "X-Shopify-Access-Token": SHOPIFY_ADMIN_API_PASSWORD
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, variables })
       });
 
       if (!response.ok) {
@@ -118,67 +90,72 @@ module.exports = async (req, res) => {
       }
 
       const json = await response.json();
+
       if (json.errors) {
-        throw new Error(`GraphQL error: ${JSON.stringify(json.errors)}`);
+        throw new Error(`GraphQL errors: ${JSON.stringify(json.errors)}`);
       }
 
-      const products = json.data.products.edges;
+      const products = json.data.products.edges.map(e => e.node);
+      const pageInfo = json.data.products.pageInfo;
 
-      for (const productEdge of products) {
-        const product = productEdge.node;
-        const vendorFirstLetter = product.vendor?.[0]?.toUpperCase();
+      for (const product of products) {
+        checkedCount++;
 
-        // Filter vendors by first letter if needed; currently no filtering (all vendors)
-        // If you want to filter to A-B vendors, uncomment:
-        // if (!vendorFirstLetter || vendorFirstLetter < 'A' || vendorFirstLetter > 'B') continue;
+        // Filter vendors if you want only A-B; comment out or adjust as needed
+        // if (!product.vendor || !["A","B"].includes(product.vendor[0].toUpperCase())) continue;
 
-        // Gather product channel names, excluding ignored channels
+        // Collect product's channel names, excluding ignored channels
         const channelNames = product.publications.edges
-          .map(e => e.node.channel?.name)
-          .filter(name => name && !ignoredChannels.includes(name));
+          .map(edge => edge.node.channel?.name)
+          .filter(name => name && !IGNORED_CHANNELS.has(name));
 
-        // Check if product channels include at least one of the validGroups as a subset (allow extra channels)
-        const isValid = validGroups.some(group =>
+        // Check if product matches any valid channel group (allow extra channels)
+        const inValidGroup = VALID_CHANNEL_GROUPS.some(group =>
           group.every(channel => channelNames.includes(channel))
         );
 
-        if (!isValid) {
+        if (!inValidGroup) {
           invalidProductIds.push(product.id);
         }
       }
 
-      checkedCount += products.length;
-
-      // Pagination info
-      hasNextPage = json.data.products.pageInfo.hasNextPage;
-      cursor = json.data.products.pageInfo.endCursor;
-
-      // Save cursor for next run
-      await setCursor(cursor);
-
-      // To avoid long-running functions, break early (optional)
-      // Comment out if you want full scan every run
-      // if (checkedCount >= 500) break;
+      if (pageInfo.hasNextPage) {
+        cursor = pageInfo.endCursor;
+      } else {
+        hasNextPage = false;
+        cursor = null;
+      }
     }
 
-    // Compose email body & subject
-    let emailSubject = '';
-    let emailBody = '';
-
-    if (invalidProductIds.length > 0) {
-      emailSubject = `Shopify Check: ${invalidProductIds.length} products NOT in valid channel groups`;
-      emailBody = `The following product IDs were found NOT in valid channel groups:\n\n${invalidProductIds.join('\n')}`;
+    // Save cursor for next run
+    if (cursor) {
+      await redis.set(CURSOR_KEY, cursor);
     } else {
-      emailSubject = `Shopify Check: All products are in valid channel groups`;
-      emailBody = `✅ Checked ${checkedCount} products. No invalid products found.`;
+      // Reset cursor to start from beginning next time
+      await redis.del(CURSOR_KEY);
     }
 
-    // Send email report
-    await sendEmail(emailSubject, emailBody);
+    // Compose email message
+    let emailBody;
+    if (invalidProductIds.length > 0) {
+      emailBody = `Checked ${checkedCount} products.\n\nFound ${invalidProductIds.length} INVALID products (not in valid channel groups):\n\n${invalidProductIds.join('\n')}`;
+    } else {
+      emailBody = `Checked ${checkedCount} products.\n\n✅ No invalid products found.`;
+    }
 
-    // Respond success
+    // Send email via Postmark
+    await postmarkClient.sendEmail({
+      From: EMAIL_FROM,
+      To: EMAIL_TO,
+      Subject: `Shopify Product Channel Check Report`,
+      TextBody: emailBody
+    });
+
+    res.setHeader('Content-Type', 'text/plain');
     res.status(200).send(emailBody);
-  } catch (err) {
-    res.status(500).send(`💥 Error: ${err.message}`);
+
+  } catch (error) {
+    res.setHeader('Content-Type', 'text/plain');
+    res.status(500).send(`💥 Error: ${error.message}`);
   }
 };
