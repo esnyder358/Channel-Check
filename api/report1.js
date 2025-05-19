@@ -16,6 +16,17 @@ module.exports = async (req, res) => {
       ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
     ];
 
+    const IGNORED_CHANNELS = new Set([
+      "Blueswitch",
+      "Multify",
+      "Customer Shipping Rates",
+      "Facebook & Instagram",
+      "Shop",
+      "Google & YouTube",
+      "Yotpo Email Marketing & SMS",
+      "Pinterest"
+    ]);
+
     const matchingProductIds = [];
     let pageInfo = null;
     let hasNextPage = true;
@@ -41,9 +52,13 @@ module.exports = async (req, res) => {
         const vendorFirstLetter = product.vendor?.[0]?.toUpperCase();
         if (!vendorFirstLetter || vendorFirstLetter < 'A' || vendorFirstLetter > 'G') continue;
 
-        // ✅ Replace this function with your real channel-detection logic later
-        const channelNames = getSimulatedChannelNames(product);
+        // Get simulated channel names (replace with real logic when ready)
+        let channelNames = getSimulatedChannelNames(product);
 
+        // Filter out ignored channels
+        channelNames = channelNames.filter(c => !IGNORED_CHANNELS.has(c));
+
+        // Is this product in at least one valid group?
         const isInValidGroup = validGroups.some(group =>
           group.every(requiredChannel => channelNames.includes(requiredChannel))
         );
@@ -53,7 +68,7 @@ module.exports = async (req, res) => {
         }
       }
 
-      // Pagination logic is simplified — only first page
+      // Pagination placeholder – only first 250 for now
       hasNextPage = false;
     }
 
@@ -69,22 +84,17 @@ module.exports = async (req, res) => {
   }
 };
 
-// 🧪 TEMP: Simulate product publishing channels
+// 🧪 TEMP: Simulated channel data
 function getSimulatedChannelNames(product) {
-  // Example 1: simulate based on product title
+  // Example logic for mocking channel names
   if (product.title.includes("Carro")) {
-    return ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"];
+    return ["Online Store", "Carro", "Lyve: Shoppable Video & Stream", "Pinterest"];
   }
-
-  // Example 2: based on vendor
   if (product.vendor === "Test Vendor A") {
-    return ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"];
+    return ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream", "Google & YouTube"];
   }
-
-  // Example 3: default fallback
   if (product.published_scope === "global") {
     return ["Online Store"];
   }
-
   return [];
 }
