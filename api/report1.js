@@ -1,4 +1,11 @@
 const fetch = require('node-fetch');
+const postmark = require('postmark');
+
+const POSTMARK_API_TOKEN = process.env.POSTMARK_API_TOKEN;
+const EMAIL_TO = process.env.EMAIL_TO; // your email
+const EMAIL_FROM = process.env.EMAIL_FROM; // verified sender email
+
+const client = new postmark.ServerClient(POSTMARK_API_TOKEN);
 
 module.exports = async (req, res) => {
   try {
@@ -9,6 +16,10 @@ module.exports = async (req, res) => {
 
     if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_PASSWORD) {
       throw new Error("Missing Shopify credentials in environment.");
+    }
+
+    if (!POSTMARK_API_TOKEN || !EMAIL_TO || !EMAIL_FROM) {
+      throw new Error("Missing Postmark email config.");
     }
 
     const SHOPIFY_API_URL = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/graphql.json`;
@@ -32,8 +43,7 @@ module.exports = async (req, res) => {
     const matchingProductIds = [];
     let cursor = null;
     let page = 1;
-
-    const MAX_PAGES = 10; // safety limit: max pages to fetch per request (adjust as needed)
+    const MAX_PAGES = 20; // Increase max pages if you want (1000 products max)
 
     const query = `
       query GetProducts($cursor: String) {
@@ -45,7 +55,6 @@ module.exports = async (req, res) => {
           edges {
             node {
               id
-              title
               vendor
               resourcePublications(first: 50) {
                 edges {
@@ -102,7 +111,7 @@ module.exports = async (req, res) => {
         );
 
         if (!isInValidGroup) {
-          matchingProductIds.push(`${product.title} (${product.id})`);
+          matchingProductIds.push(product.id);
         }
       }
 
@@ -112,16 +121,22 @@ module.exports = async (req, res) => {
       page++;
     }
 
-    res.setHeader('Content-Type', 'text/plain');
-
-    if (matchingProductIds.length === 0) {
-      res.status(200).send(`✅ All A–B vendor products (up to ${page*50}) are in valid channel groups.`);
+    if (matchingProductIds.length > 0) {
+      // Send email alert
+      await client.sendEmail({
+        From: EMAIL_FROM,
+        To: EMAIL_TO,
+        Subject: `⚠️ Shopify Products NOT in Valid Channel Groups - Found ${matchingProductIds.length}`,
+        TextBody: `The following product IDs are NOT in valid channel groups (vendors A-B):\n\n${matchingProductIds.join('\n')}`
+      });
+      console.log(`Email sent for ${matchingProductIds.length} invalid products.`);
     } else {
-      res.status(200).send(
-        `Products NOT in a valid channel group (A–B vendors, checked up to ${page*50} products):\n\n` +
-        matchingProductIds.join('\n')
-      );
+      console.log('No invalid products found this run.');
     }
+
+    res.setHeader('Content-Type', 'text/plain');
+    res.status(200).send(`Checked ${page * 50} products. Found ${matchingProductIds.length} invalid products.`);
+
   } catch (err) {
     res.setHeader('Content-Type', 'text/plain');
     res.status(500).send(`💥 Error: ${err.message}`);
