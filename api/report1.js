@@ -1,12 +1,18 @@
 const fetch = require('node-fetch');
+const postmark = require('postmark');
 
+const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
+const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_API_PASSWORD;
 const POSTMARK_API_KEY = process.env.POSTMARK_API_KEY;
-const EMAIL_TO = process.env.EMAIL_TO;
 const EMAIL_FROM = process.env.EMAIL_FROM;
-const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
-const SHOPIFY_ADMIN_API_PASSWORD = process.env.SHOPIFY_ADMIN_API_PASSWORD;
+const EMAIL_TO = process.env.EMAIL_TO;
 
-const IGNORED_CHANNELS = [
+const VALID_GROUPS = [
+  ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
+  ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
+];
+
+const IGNORE_CHANNELS = new Set([
   "Blueswitch",
   "Multify",
   "Customer Shipping Rates",
@@ -15,124 +21,89 @@ const IGNORED_CHANNELS = [
   "Google & YouTube",
   "Yotpo Email Marketing & SMS",
   "Pinterest"
-];
+]);
 
-const VALID_GROUPS = [
-  ["Online Store", "Carro", "Lyve: Shoppable Video & Stream"],
-  ["Online Store", "Collective: Supplier", "Lyve: Shoppable Video & Stream"]
-];
+module.exports = async (req, res) => {
+  try {
+    let invalidProducts = [];
+    let cursor = req.query.cursor || null;
+    let checked = 0;
+    let hasNextPage = true;
 
-async function fetchProducts(cursor = null) {
-  const query = `
-    query GetProducts($cursor: String) {
-      products(first: 50, after: $cursor) {
-        edges {
-          cursor
-          node {
-            id
-            title
-            vendor
-            publications(first: 20) {
-              edges {
-                node {
-                  channel {
-                    name
+    while (hasNextPage && checked < 1000) {
+      const query = `
+        query GetProducts($cursor: String) {
+          products(first: 100, after: $cursor) {
+            pageInfo {
+              hasNextPage
+            }
+            edges {
+              cursor
+              node {
+                id
+                title
+                vendor
+                publications(first: 100) {
+                  edges {
+                    node {
+                      channel {
+                        name
+                      }
+                    }
                   }
                 }
               }
             }
           }
         }
-        pageInfo {
-          hasNextPage
+      `;
+
+      const response = await fetch(`https://${SHOPIFY_DOMAIN}/admin/api/2023-10/graphql.json`, {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query, variables: { cursor } })
+      });
+
+      const result = await response.json();
+
+      if (result.errors) throw new Error("GraphQL error: " + JSON.stringify(result.errors));
+
+      const products = result.data.products.edges;
+      hasNextPage = result.data.products.pageInfo.hasNextPage;
+      cursor = hasNextPage ? products[products.length - 1].cursor : null;
+
+      for (const { node: product } of products) {
+        checked++;
+
+        const channelNames = product.publications.edges
+          .map(e => e.node.channel?.name)
+          .filter(name => name && !IGNORE_CHANNELS.has(name));
+
+        const isValid = VALID_GROUPS.some(group =>
+          group.every(required => channelNames.includes(required))
+        );
+
+        if (!isValid) {
+          invalidProducts.push(product.id);
         }
       }
     }
-  `;
 
-  const response = await fetch(`https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/graphql.json`, {
-    method: 'POST',
-    headers: {
-      'X-Shopify-Access-Token': SHOPIFY_ADMIN_API_PASSWORD,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ query, variables: { cursor } }),
-  });
-
-  const result = await response.json();
-  if (result.errors) {
-    throw new Error(`GraphQL error: ${JSON.stringify(result.errors)}`);
-  }
-
-  return result.data.products;
-}
-
-function isInValidGroup(channels) {
-  const filtered = channels.filter(name => !IGNORED_CHANNELS.includes(name));
-  return VALID_GROUPS.some(group =>
-    group.every(valid => filtered.includes(valid))
-  );
-}
-
-async function sendEmail(productIds) {
-  if (!POSTMARK_API_KEY || !EMAIL_TO || !EMAIL_FROM) {
-    throw new Error("Missing Postmark or email environment variables.");
-  }
-
-  const response = await fetch('https://api.postmarkapp.com/email', {
-    method: 'POST',
-    headers: {
-      'X-Postmark-Server-Token': POSTMARK_API_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
+    // Send Email via Postmark
+    const client = new postmark.ServerClient(POSTMARK_API_KEY);
+    await client.sendEmail({
       From: EMAIL_FROM,
       To: EMAIL_TO,
-      Subject: '⚠️ Invalid Shopify Product Publication Detected',
-      TextBody: `The following product IDs are not in a valid publication group:\n\n${productIds.join('\n')}`,
-    }),
-  });
+      Subject: `Channel Check: ${invalidProducts.length} invalid products`,
+      TextBody: invalidProducts.length
+        ? `❌ Found ${invalidProducts.length} product(s) not in a valid group:\n\n${invalidProducts.join('\n')}`
+        : `✅ Checked ${checked} products. All products are in valid groups.`
+    });
 
-  if (!response.ok) {
-    throw new Error(`Failed to send email: ${await response.text()}`);
-  }
-}
-
-module.exports = async (req, res) => {
-  try {
-    let cursor = req.query.cursor || null;
-    let hasNextPage = true;
-    let checkedCount = 0;
-    const invalidProductIds = [];
-
-    while (hasNextPage && checkedCount < 1000) {
-      const productsData = await fetchProducts(cursor);
-      for (const edge of productsData.edges) {
-        const product = edge.node;
-        const channels = product.publications.edges.map(pub => pub.node.channel?.name).filter(Boolean);
-        const filteredChannels = channels.filter(c => !IGNORED_CHANNELS.includes(c));
-
-        if (!isInValidGroup(filteredChannels)) {
-          invalidProductIds.push(product.id);
-        }
-
-        checkedCount++;
-        cursor = edge.cursor;
-      }
-
-      hasNextPage = productsData.pageInfo.hasNextPage;
-    }
-
-    if (invalidProductIds.length > 0) {
-      await sendEmail(invalidProductIds);
-    }
-
-    res.setHeader('Content-Type', 'text/plain');
-    res.status(200).send(
-      invalidProductIds.length
-        ? `❌ Found ${invalidProductIds.length} invalid products. Email sent.\n\nChecked ${checkedCount} products.`
-        : `✅ All checked products (${checkedCount}) are in valid channel groups.`
-    );
+    res.status(200).send(`Checked ${checked} products. Found ${invalidProducts.length} invalid products.`);
   } catch (err) {
     console.error(err);
     res.status(500).send(`💥 Error: ${err.message}`);
