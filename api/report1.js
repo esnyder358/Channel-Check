@@ -84,7 +84,9 @@ module.exports = async (req, res) => {
       for (const edge of products) {
         const product = edge.node;
         const vendorFirstLetter = product.vendor?.[0]?.toUpperCase();
-        if (!vendorFirstLetter || vendorFirstLetter < 'A' || vendorFirstLetter > 'G') continue;
+
+        // Only vendors starting with A or B
+        if (!vendorFirstLetter || (vendorFirstLetter !== 'A' && vendorFirstLetter !== 'B')) continue;
 
         const channelNames = product.resourcePublications.edges.map(
           edge => edge.node.publication?.name
@@ -105,8 +107,8 @@ module.exports = async (req, res) => {
     res.setHeader('Content-Type', 'text/plain');
     res.status(200).send(
       matchingProductIds.length
-        ? `Products NOT in a valid channel group (A–G vendors):\n\n${matchingProductIds.join('\n')}`
-        : "✅ All A–G vendor products are in valid channel groups."
+        ? `Products NOT in a valid channel group (A–B vendors):\n\n${matchingProductIds.join('\n')}`
+        : "✅ All A–B vendor products are in valid channel groups."
     );
   } catch (err) {
     res.setHeader('Content-Type', 'text/plain');
