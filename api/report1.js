@@ -1,8 +1,8 @@
 const fetch = require('node-fetch');
 
 const POSTMARK_API_KEY = process.env.POSTMARK_API_KEY;
-const POSTMARK_EMAIL_TO = process.env.POSTMARK_EMAIL_TO;
-const POSTMARK_EMAIL_FROM = process.env.POSTMARK_EMAIL_FROM;
+const EMAIL_TO = process.env.EMAIL_TO;
+const EMAIL_FROM = process.env.EMAIL_FROM;
 const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_ADMIN_API_PASSWORD = process.env.SHOPIFY_ADMIN_API_PASSWORD;
 
@@ -35,7 +35,7 @@ async function fetchProducts(cursor = null) {
             publications(first: 20) {
               edges {
                 node {
-                  publication {
+                  channel {
                     name
                   }
                 }
@@ -75,8 +75,8 @@ function isInValidGroup(channels) {
 }
 
 async function sendEmail(productIds) {
-  if (!POSTMARK_API_KEY || !POSTMARK_EMAIL_TO || !POSTMARK_EMAIL_FROM) {
-    throw new Error("Missing Postmark environment variables.");
+  if (!POSTMARK_API_KEY || !EMAIL_TO || !EMAIL_FROM) {
+    throw new Error("Missing Postmark or email environment variables.");
   }
 
   const response = await fetch('https://api.postmarkapp.com/email', {
@@ -86,8 +86,8 @@ async function sendEmail(productIds) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      From: POSTMARK_EMAIL_FROM,
-      To: POSTMARK_EMAIL_TO,
+      From: EMAIL_FROM,
+      To: EMAIL_TO,
       Subject: '⚠️ Invalid Shopify Product Publication Detected',
       TextBody: `The following product IDs are not in a valid publication group:\n\n${productIds.join('\n')}`,
     }),
@@ -109,7 +109,7 @@ module.exports = async (req, res) => {
       const productsData = await fetchProducts(cursor);
       for (const edge of productsData.edges) {
         const product = edge.node;
-        const channels = product.publications.edges.map(pub => pub.node.publication?.name).filter(Boolean);
+        const channels = product.publications.edges.map(pub => pub.node.channel?.name).filter(Boolean);
         const filteredChannels = channels.filter(c => !IGNORED_CHANNELS.includes(c));
 
         if (!isInValidGroup(filteredChannels)) {
