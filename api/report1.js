@@ -4,7 +4,7 @@ const postmark = require('postmark');
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_URL,
-  token: process.env.UPSTASH_REDIS_TOKEN,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
 const postmarkClient = new postmark.ServerClient(process.env.POSTMARK_API_KEY);
@@ -42,6 +42,8 @@ module.exports = async (req, res) => {
     }
 
     let cursor = await redis.get(CURSOR_KEY);
+    console.log("Current cursor from Redis:", cursor);
+    
     let hasNextPage = true;
     let checkedCount = 0;
     const invalidProductIds = [];
@@ -101,15 +103,10 @@ module.exports = async (req, res) => {
       for (const product of products) {
         checkedCount++;
 
-        // Filter vendors if you want only A-B; comment out or adjust as needed
-        // if (!product.vendor || !["A","B"].includes(product.vendor[0].toUpperCase())) continue;
-
-        // Collect product's channel names, excluding ignored channels
         const channelNames = product.publications.edges
           .map(edge => edge.node.channel?.name)
           .filter(name => name && !IGNORED_CHANNELS.has(name));
 
-        // Check if product matches any valid channel group (allow extra channels)
         const inValidGroup = VALID_CHANNEL_GROUPS.some(group =>
           group.every(channel => channelNames.includes(channel))
         );
@@ -127,15 +124,15 @@ module.exports = async (req, res) => {
       }
     }
 
-    // Save cursor for next run
+    // ⬇️ Debug: see if we're setting or clearing the cursor
     if (cursor) {
+      console.log("Saving cursor to Redis:", cursor);
       await redis.set(CURSOR_KEY, cursor);
     } else {
-      // Reset cursor to start from beginning next time
+      console.log("Resetting Redis cursor");
       await redis.del(CURSOR_KEY);
     }
 
-    // Compose email message
     let emailBody;
     if (invalidProductIds.length > 0) {
       emailBody = `Checked ${checkedCount} products.\n\nFound ${invalidProductIds.length} INVALID products (not in valid channel groups):\n\n${invalidProductIds.join('\n')}`;
@@ -143,7 +140,6 @@ module.exports = async (req, res) => {
       emailBody = `Checked ${checkedCount} products.\n\n✅ No invalid products found.`;
     }
 
-    // Send email via Postmark
     await postmarkClient.sendEmail({
       From: EMAIL_FROM,
       To: EMAIL_TO,
@@ -155,6 +151,7 @@ module.exports = async (req, res) => {
     res.status(200).send(emailBody);
 
   } catch (error) {
+    console.error("💥 Error:", error);
     res.setHeader('Content-Type', 'text/plain');
     res.status(500).send(`💥 Error: ${error.message}`);
   }
