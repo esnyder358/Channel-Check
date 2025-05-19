@@ -3,7 +3,7 @@ const { Redis } = require('@upstash/redis');
 const postmark = require('postmark');
 
 const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_URL,
+  url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
@@ -29,6 +29,7 @@ const PRODUCTS_PER_BATCH = 250;
 const CURSOR_KEY = "shopify_cursor";
 
 module.exports = async (req, res) => {
+  const debugLog = [];
   try {
     const {
       SHOPIFY_STORE_DOMAIN,
@@ -42,8 +43,8 @@ module.exports = async (req, res) => {
     }
 
     let cursor = await redis.get(CURSOR_KEY);
-    console.log("Current cursor from Redis:", cursor);
-    
+    debugLog.push(`👉 Current cursor from Redis: ${cursor || "none"}`);
+
     let hasNextPage = true;
     let checkedCount = 0;
     const invalidProductIds = [];
@@ -124,13 +125,12 @@ module.exports = async (req, res) => {
       }
     }
 
-    // ⬇️ Debug: see if we're setting or clearing the cursor
     if (cursor) {
-      console.log("Saving cursor to Redis:", cursor);
       await redis.set(CURSOR_KEY, cursor);
+      debugLog.push(`✅ Saving new cursor to Redis: ${cursor}`);
     } else {
-      console.log("Resetting Redis cursor");
       await redis.del(CURSOR_KEY);
+      debugLog.push(`🧹 Resetting Redis cursor (end reached)`);
     }
 
     let emailBody;
@@ -140,6 +140,8 @@ module.exports = async (req, res) => {
       emailBody = `Checked ${checkedCount} products.\n\n✅ No invalid products found.`;
     }
 
+    debugLog.push(`📬 Email body:\n${emailBody}`);
+
     await postmarkClient.sendEmail({
       From: EMAIL_FROM,
       To: EMAIL_TO,
@@ -148,11 +150,11 @@ module.exports = async (req, res) => {
     });
 
     res.setHeader('Content-Type', 'text/plain');
-    res.status(200).send(emailBody);
+    res.status(200).send(debugLog.join('\n'));
 
   } catch (error) {
-    console.error("💥 Error:", error);
+    debugLog.push(`💥 Error: ${error.message}`);
     res.setHeader('Content-Type', 'text/plain');
-    res.status(500).send(`💥 Error: ${error.message}`);
+    res.status(500).send(debugLog.join('\n'));
   }
 };
