@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/report1/check-product-publications",
-      "schedule": "20 * * * *"
+      "path": "/api/report1",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
