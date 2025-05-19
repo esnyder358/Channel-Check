@@ -29,7 +29,6 @@ const PRODUCTS_PER_BATCH = 250;
 const CURSOR_KEY = "shopify_cursor";
 
 module.exports = async (req, res) => {
-  const debugLog = [];
   try {
     const {
       SHOPIFY_STORE_DOMAIN,
@@ -42,8 +41,14 @@ module.exports = async (req, res) => {
       throw new Error("Missing required environment variables.");
     }
 
+    // DEBUG: Log env vars (masked)
+    console.log("Running product check...");
+    console.log(`Shopify domain: ${SHOPIFY_STORE_DOMAIN}`);
+    console.log(`Email to: ${EMAIL_TO}`);
+
+    // Read cursor from Redis
     let cursor = await redis.get(CURSOR_KEY);
-    debugLog.push(`👉 Current cursor from Redis: ${cursor || "none"}`);
+    console.log("Current Redis cursor:", cursor);
 
     let hasNextPage = true;
     let checkedCount = 0;
@@ -104,10 +109,12 @@ module.exports = async (req, res) => {
       for (const product of products) {
         checkedCount++;
 
+        // Collect product's channel names, excluding ignored channels
         const channelNames = product.publications.edges
           .map(edge => edge.node.channel?.name)
           .filter(name => name && !IGNORED_CHANNELS.has(name));
 
+        // Check if product matches any valid channel group (allow extra channels)
         const inValidGroup = VALID_CHANNEL_GROUPS.some(group =>
           group.every(channel => channelNames.includes(channel))
         );
@@ -125,14 +132,16 @@ module.exports = async (req, res) => {
       }
     }
 
+    // Save cursor for next run
     if (cursor) {
       await redis.set(CURSOR_KEY, cursor);
-      debugLog.push(`✅ Saving new cursor to Redis: ${cursor}`);
+      console.log("Saved new cursor to Redis:", cursor);
     } else {
       await redis.del(CURSOR_KEY);
-      debugLog.push(`🧹 Resetting Redis cursor (end reached)`);
+      console.log("No cursor found, cleared Redis cursor key");
     }
 
+    // Compose email message
     let emailBody;
     if (invalidProductIds.length > 0) {
       emailBody = `Checked ${checkedCount} products.\n\nFound ${invalidProductIds.length} INVALID products (not in valid channel groups):\n\n${invalidProductIds.join('\n')}`;
@@ -140,8 +149,7 @@ module.exports = async (req, res) => {
       emailBody = `Checked ${checkedCount} products.\n\n✅ No invalid products found.`;
     }
 
-    debugLog.push(`📬 Email body:\n${emailBody}`);
-
+    // Send email via Postmark
     await postmarkClient.sendEmail({
       From: EMAIL_FROM,
       To: EMAIL_TO,
@@ -149,12 +157,14 @@ module.exports = async (req, res) => {
       TextBody: emailBody
     });
 
+    console.log("Email sent successfully.");
+
     res.setHeader('Content-Type', 'text/plain');
-    res.status(200).send(debugLog.join('\n'));
+    res.status(200).send(emailBody);
 
   } catch (error) {
-    debugLog.push(`💥 Error: ${error.message}`);
+    console.error("Error in product check:", error);
     res.setHeader('Content-Type', 'text/plain');
-    res.status(500).send(debugLog.join('\n'));
+    res.status(500).send(`💥 Error: ${error.message}`);
   }
 };
