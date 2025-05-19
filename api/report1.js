@@ -47,7 +47,7 @@ module.exports = async (req, res) => {
                 id
                 title
                 vendor
-                publications(first: 50) {
+                resourcePublications(first: 50) {
                   edges {
                     node {
                       publication {
@@ -86,7 +86,10 @@ module.exports = async (req, res) => {
         const vendorFirstLetter = product.vendor?.[0]?.toUpperCase();
         if (!vendorFirstLetter || vendorFirstLetter < 'A' || vendorFirstLetter > 'G') continue;
 
-        const channelNames = product.publications.edges.map(edge => edge.node.publication.name);
+        const channelNames = product.resourcePublications.edges.map(
+          edge => edge.node.publication?.name
+        ).filter(Boolean);
+
         const filteredChannels = channelNames.filter(name => !IGNORED_CHANNELS.has(name));
 
         const isInValidGroup = VALID_GROUPS.some(group =>
