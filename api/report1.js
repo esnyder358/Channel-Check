@@ -35,7 +35,9 @@ async function fetchProducts(cursor = null) {
             publications(first: 20) {
               edges {
                 node {
-                  channelName
+                  publication {
+                    name
+                  }
                 }
               }
             }
@@ -66,9 +68,9 @@ async function fetchProducts(cursor = null) {
 }
 
 function isInValidGroup(channels) {
-  const filteredChannels = channels.filter(name => !IGNORED_CHANNELS.includes(name));
+  const filtered = channels.filter(name => !IGNORED_CHANNELS.includes(name));
   return VALID_GROUPS.some(group =>
-    group.every(valid => filteredChannels.includes(valid))
+    group.every(valid => filtered.includes(valid))
   );
 }
 
@@ -107,7 +109,7 @@ module.exports = async (req, res) => {
       const productsData = await fetchProducts(cursor);
       for (const edge of productsData.edges) {
         const product = edge.node;
-        const channels = product.publications.edges.map(pub => pub.node.channelName);
+        const channels = product.publications.edges.map(pub => pub.node.publication?.name).filter(Boolean);
         const filteredChannels = channels.filter(c => !IGNORED_CHANNELS.includes(c));
 
         if (!isInValidGroup(filteredChannels)) {
