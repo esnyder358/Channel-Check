@@ -1,11 +1,11 @@
 const fetch = require('node-fetch');
 const postmark = require('postmark');
 
-const POSTMARK_API_TOKEN = process.env.POSTMARK_API_TOKEN;
+const POSTMARK_API_KEY = process.env.POSTMARK_API_KEY;
 const EMAIL_TO = process.env.EMAIL_TO; // your email
 const EMAIL_FROM = process.env.EMAIL_FROM; // verified sender email
 
-const client = new postmark.ServerClient(POSTMARK_API_TOKEN);
+const client = new postmark.ServerClient(POSTMARK_API_KEY);
 
 module.exports = async (req, res) => {
   try {
@@ -18,7 +18,7 @@ module.exports = async (req, res) => {
       throw new Error("Missing Shopify credentials in environment.");
     }
 
-    if (!POSTMARK_API_TOKEN || !EMAIL_TO || !EMAIL_FROM) {
+    if (!POSTMARK_API_KEY || !EMAIL_TO || !EMAIL_FROM) {
       throw new Error("Missing Postmark email config.");
     }
 
