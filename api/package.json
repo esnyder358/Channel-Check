@@ -4,6 +4,7 @@
   "type": "commonjs",
   "dependencies": {
     "node-fetch": "^2.6.7",
-    "postmark": "^3.0.1"
+    "postmark": "^3.0.1",
+    "@upstash/redis": "^1.0.0"
   }
 }
