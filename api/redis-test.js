@@ -7,11 +7,19 @@ const redis = new Redis({
 
 module.exports = async (req, res) => {
   try {
-    await redis.set('test-key', 'Hello from Redis!');
-    const value = await redis.get('test-key');
+    const testKey = "redis_test_key";
+    const testValue = "Hello from Redis via Vercel";
 
-    res.status(200).json({ success: true, value });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    // Set key
+    await redis.set(testKey, testValue);
+
+    // Get key
+    const value = await redis.get(testKey);
+
+    res.setHeader('Content-Type', 'text/plain');
+    res.status(200).send(`✅ Redis set/get success:\n\n${testKey} = ${value}`);
+  } catch (error) {
+    res.setHeader('Content-Type', 'text/plain');
+    res.status(500).send(`❌ Redis test failed: ${error.message}`);
   }
 };
