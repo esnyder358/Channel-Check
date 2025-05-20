@@ -1,9 +1,12 @@
-const { Redis } = require('@upstash/redis');
+import { Redis } from '@upstash/redis'
 
 const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+  url: 'https://above-monkfish-17358.upstash.io',
+  token: 'AUPOAAIjcDEwMWZhZWUwZGFhODI0MjhhYWI2YjUyNWIyMTAzZjcyMXAxMA',
+})
+
+await redis.set('foo', 'bar');
+const data = await redis.get('foo');
 
 module.exports = async (req, res) => {
   try {
